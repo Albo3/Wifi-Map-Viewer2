@@ -1,5 +1,5 @@
 // Add these at the top
-let map, markers = [], selectedNetwork = null;
+let map, markers = [], selectedNetwork = null, markerCluster = null;
 let saveDbBtn, addNoteBtn, noteEditor, networkNote, saveNoteBtn, cancelNoteBtn;
 
 // Initialize on DOM content loaded
@@ -19,16 +19,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         zoomControl: true
     }).setView([-32.007, 115.755], 13);
 
-    // Option 1: OpenStreetMap (Free, no API key needed)
+    // Use only OpenStreetMap (Free, no API key needed)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 19
-    }).addTo(map);
-
-    // Option 2: CartoDB Dark Matter (Free for non-commercial use)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
         maxZoom: 19
     }).addTo(map);
 
@@ -126,8 +119,8 @@ function displayNetworks(networks) {
     markers = []; // Clear markers array
     const bounds = L.latLngBounds();
     
-    // Create marker cluster group with options
-    const markerCluster = L.markerClusterGroup({
+    // Create marker cluster group with options - use global variable
+    markerCluster = L.markerClusterGroup({
         // Customize clustering distance - adjust this to control when clusters are formed
         maxClusterRadius: 40,
         
@@ -315,8 +308,8 @@ function updateDbStats(stats) {
 
 // Initialize all event listeners
 function initEventListeners() {
-    // File input handler
-    document.getElementById('dbFile').addEventListener('change', async function(event) {
+    // File input handler - update ID from 'dbFile' to 'fileInput'
+    document.getElementById('fileInput').addEventListener('change', async function(event) {
         const file = event.target.files[0];
         if (!file) return;
 
@@ -356,6 +349,20 @@ function initEventListeners() {
     // Add Note button
     addNoteBtn.addEventListener('click', function() {
         if (selectedNetwork) {
+            // Set the network name in the display span
+            document.getElementById('networkNameDisplay').textContent = selectedNetwork.ssid;
+            
+            // Load existing note content
+            const existingNote = selectedNetwork.marker.getPopup()
+                .getContent().match(/Network Notes:<\/span>\s*<span>(.*?)<\/span>/);
+            
+            if (existingNote && existingNote[1] && existingNote[1] !== 'None') {
+                networkNote.value = existingNote[1];
+            } else {
+                networkNote.value = '';
+            }
+            
+            // Display the note editor
             noteEditor.style.display = 'block';
         }
     });
@@ -411,8 +418,13 @@ function initEventListeners() {
         }
     });
 
-    // Cancel Note button
-    cancelNoteBtn.addEventListener('click', function() {
+    // Add event listener for the note editor close button
+    document.getElementById('noteCloseBtn').addEventListener('click', function() {
+        noteEditor.style.display = 'none';
+    });
+
+    // Add event listener for the cancel button (which should do the same thing)
+    document.getElementById('cancelNoteBtn').addEventListener('click', function() {
         noteEditor.style.display = 'none';
     });
 
@@ -441,42 +453,125 @@ function initEventListeners() {
         }
     });
 
-    // Search input handler
-    document.getElementById('searchInput').addEventListener('input', function(e) {
+    // Updated search handler with dropdown functionality
+    document.getElementById('search').addEventListener('input', function(e) {
         const searchTerm = e.target.value.toLowerCase();
+        const searchResultsContainer = document.getElementById('searchResults');
+        
+        // Clear previous results
+        searchResultsContainer.innerHTML = '';
+        
+        if (!searchTerm) {
+            searchResultsContainer.style.display = 'none';
+            return;
+        }
+        
+        // Find matching networks
         let matchCount = 0;
-
+        const matchingNetworks = [];
+        
         markers.forEach(({marker, ssid}) => {
-            const matches = ssid.includes(searchTerm);
-            
-            if (matches) {
+            if (ssid.includes(searchTerm)) {
                 matchCount++;
-                // Get marker element - this might need to wait until it's spiderfied
-                const element = marker.getElement();
-                if (element) {
-                    element.classList.add('highlighted-marker');
-                }
-                
-                // Open the popup if we're filtering down to just a few items
-                if (matchCount < 10) {
-                    marker.openPopup();
-                }
-            } else {
-                const element = marker.getElement();
-                if (element) {
-                    element.classList.remove('highlighted-marker');
-                }
-                marker.closePopup();
+                matchingNetworks.push({
+                    ssid: ssid,
+                    marker: marker
+                });
             }
         });
+        
+        // Update search count
+        const searchCountElement = document.getElementById('searchCount');
+        if (searchCountElement) {
+            searchCountElement.textContent = searchTerm ? `Found ${matchCount} matches` : '';
+        }
+        
+        // Build dropdown if we have matches
+        if (matchCount > 0) {
+            searchResultsContainer.style.display = 'block';
+            
+            // Create dropdown items (limit to 10 for performance)
+            matchingNetworks.slice(0, 10).forEach(network => {
+                const item = document.createElement('div');
+                item.className = 'search-result-item';
+                item.textContent = network.ssid;
+                
+                // Add click handler to zoom to network
+                item.addEventListener('click', function() {
+                    if (!markerCluster) {
+                        console.error("Marker cluster not initialized");
+                        return;
+                    }
+                    
+                    try {
+                        // First zoom to marker's position at a reasonable zoom level
+                        map.setView(network.marker.getLatLng(), 16);
+                        
+                        // Then use zoomToShowLayer to make it visible and open the popup
+                        setTimeout(() => {
+                            try {
+                                markerCluster.zoomToShowLayer(network.marker, function() {
+                                    // This callback runs when the marker should be visible
+                                    network.marker.openPopup();
+                                    
+                                    // Select this network
+                                    selectedNetwork = {
+                                        ssid: network.ssid,
+                                        marker: network.marker
+                                    };
+                                    
+                                    // Enable add note button
+                                    addNoteBtn.disabled = false;
+                                });
+                            } catch (e) {
+                                console.error("Error in zoomToShowLayer:", e);
+                                // Fallback approach if zoomToShowLayer fails
+                                map.setView(network.marker.getLatLng(), 18);
+                                network.marker.openPopup();
+                            }
+                        }, 300); // Small delay to let the map settle
+                    } catch (e) {
+                        console.error("Error in search click handler:", e);
+                    }
+                    
+                    // Hide the search results
+                    searchResultsContainer.style.display = 'none';
+                });
+                
+                searchResultsContainer.appendChild(item);
+            });
+            
+            // Add "show all" option if there are many results
+            if (matchCount > 10) {
+                const showAllItem = document.createElement('div');
+                showAllItem.className = 'search-result-item show-all';
+                showAllItem.textContent = `Show all ${matchCount} results on map`;
+                
+                showAllItem.addEventListener('click', function() {
+                    // Create bounds for all matching markers
+                    const bounds = L.latLngBounds(matchingNetworks.map(n => n.marker.getLatLng()));
+                    map.fitBounds(bounds, { padding: [50, 50] });
+                    searchResultsContainer.style.display = 'none';
+                });
+                
+                searchResultsContainer.appendChild(showAllItem);
+            }
+        } else {
+            // No matches
+            searchResultsContainer.style.display = 'none';
+        }
+    });
 
-        document.getElementById('searchCount').textContent = 
-            searchTerm ? `Found ${matchCount} matches` : '';
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.search-container')) {
+            document.getElementById('searchResults').style.display = 'none';
+        }
     });
 
     // Merge DB button
     document.getElementById('mergeDbBtn').addEventListener('click', function() {
-        document.getElementById('dbFile').click(); // Reuse the main file input
+        document.getElementById('fileInput').click(); // Update from 'dbFile' to 'fileInput'
     });
 
     // DB Info button
@@ -488,36 +583,108 @@ function initEventListeners() {
         try {
             const stats = await window.masterDb.getStats();
             
-            let statsHtml = `<h4>Network Statistics</h4>`;
+            // Calculate percentages for visualization
+            const totalNetworks = stats.totalNetworks;
             
-            // Total networks
-            statsHtml += `<div class="stat-section"><strong>Total Networks:</strong> ${stats.totalNetworks}</div>`;
-            statsHtml += `<div class="stat-section"><strong>Networks with Notes:</strong> ${stats.networksWithNotes}</div>`;
+            // Sort security types by count (descending)
+            const securityTypesArray = Object.entries(stats.securityTypes)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10);
             
+            // Build HTML with better formatting and visualization - Remove network types chart
+            let statsHtml = `
+                <div class="stat-grid">
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.totalNetworks.toLocaleString()}</div>
+                        <div class="stat-label">Total Networks</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${stats.networksWithNotes.toLocaleString()}</div>
+                        <div class="stat-label">Networks with Notes</div>
+                    </div>
+                </div>`;
+            
+            // Add last import time if available
             if (stats.lastImport) {
-                statsHtml += `<div class="stat-section"><strong>Last Import:</strong> ${stats.lastImport.toLocaleString()}</div>`;
+                statsHtml += `
+                    <div class="stat-card">
+                        <h4>Last Database Update</h4>
+                        <div class="stat-section">
+                            ${stats.lastImport.toLocaleString()}
+                        </div>
+                    </div>`;
             }
             
-            // Network types
-            statsHtml += `<div class="stat-section"><strong>Network Types:</strong><ul>`;
-            Object.entries(stats.networkTypes).sort((a, b) => b[1] - a[1]).forEach(([type, count]) => {
-                statsHtml += `<li>${type || 'Unknown'}: ${count}</li>`;
-            });
-            statsHtml += `</ul></div>`;
+            // Enhanced Security Types visualization with better bars and formatting
+            statsHtml += `<div class="stat-card">
+                <h4>Top Security Types</h4>
+                <div class="security-list-container">`;
             
-            // Security types
-            statsHtml += `<div class="stat-section"><strong>Top Security Types:</strong><ul>`;
-            Object.entries(stats.securityTypes).sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([security, count]) => {
-                statsHtml += `<li>${security || 'Unknown'}: ${count}</li>`;
+            // Get maximum count for percentage calculation    
+            const maxCount = securityTypesArray[0][1];
+            
+            // Add a summary of security distribution
+            statsHtml += `<div class="security-summary">
+                <div class="security-bar-container">`;
+            
+            // Create a stacked bar for security distribution overview
+            let cumulativePercent = 0;
+            securityTypesArray.forEach(([security, count], index) => {
+                const percentage = (count / totalNetworks) * 100;
+                const color = getSecurityColor(security, index);
+                
+                statsHtml += `<div class="security-stack-segment" style="width: ${percentage}%; background-color: ${color};" 
+                    title="${security}: ${count} (${percentage.toFixed(1)}%)"></div>`;
+                    
+                cumulativePercent += percentage;
             });
-            statsHtml += `</ul></div>`;
+            
+            // Add "other" category if needed
+            if (cumulativePercent < 100) {
+                statsHtml += `<div class="security-stack-segment security-other" style="width: ${100-cumulativePercent}%;" 
+                    title="Other: ${totalNetworks - securityTypesArray.reduce((sum, [_, count]) => sum + count, 0)} networks"></div>`;
+            }
+            
+            statsHtml += `</div>
+                </div>`;
+            
+            // Detailed list of security types
+            statsHtml += `<ul class="security-list">`;
+            
+            securityTypesArray.forEach(([security, count], index) => {
+                const percentage = Math.round((count / totalNetworks) * 100);
+                const relativePercentage = Math.round((count / maxCount) * 100);
+                
+                // Format the security string to be more readable
+                const formattedSecurity = formatSecurityType(security);
+                const color = getSecurityColor(security, index);
+                    
+                statsHtml += `
+                    <li class="security-list-item">
+                        <div class="security-info">
+                            <div class="security-name">${formattedSecurity}</div>
+                            <div class="security-count-label">${count.toLocaleString()} networks (${percentage}%)</div>
+                        </div>
+                        <div class="security-bar-wrapper">
+                            <div class="security-bar" style="width: ${relativePercentage}%; background-color: ${color};"></div>
+                        </div>
+                    </li>`;
+            });
+            
+            statsHtml += `</ul></div></div>`;
             
             detailedStats.innerHTML = statsHtml;
-            infoPanel.style.display = 'block';
+            infoPanel.style.display = 'flex'; // Use flex to enable proper scrolling
+            
+            // Add event listener for the X button
+            document.getElementById('infoCloseBtn').addEventListener('click', function() {
+                infoPanel.style.display = 'none';
+            });
+            
         } catch (error) {
             console.error('Error getting database stats:', error);
             detailedStats.innerHTML = `<div class="error">Error loading statistics: ${error.message}</div>`;
-            infoPanel.style.display = 'block';
+            infoPanel.style.display = 'flex';
         }
     });
 
@@ -592,10 +759,9 @@ function initializeMap() {
         zoomControl: true
     }).setView([-32.007, 115.755], 13);
 
-    // You can use Stamen's Toner Lite for a softer look, or switch to a dark theme
-    // For a true dark theme, you might need to use a service like Mapbox with a dark style
-    L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>, &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors',
+    // Use the same OpenStreetMap tiles for consistency
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19
     }).addTo(map);
 }
@@ -629,4 +795,37 @@ function initializeClusterOptions() {
             });
         }
     };
+}
+
+// Helper function to determine color based on security type
+function getSecurityColor(security, index) {
+    if (security.includes('WPA3') || security.includes('SAE')) {
+        return '#2ecc71'; // Strong security - green
+    } else if (security.includes('WPA2') && security.includes('CCMP')) {
+        return '#3498db'; // Good security - blue
+    } else if (security.includes('WPA')) {
+        return '#f39c12'; // Moderate security - orange
+    } else if (security.includes('WEP')) {
+        return '#e74c3c'; // Poor security - red
+    } else if (security.includes('ESS') && !security.includes('WPA') && !security.includes('WEP')) {
+        return '#95a5a6'; // Open networks - gray
+    } else {
+        // Fallback colors for other types
+        const colors = ['#9b59b6', '#1abc9c', '#34495e', '#d35400', '#2c3e50'];
+        return colors[index % colors.length];
+    }
+}
+
+// Helper function to format security type for better readability
+function formatSecurityType(security) {
+    return security
+        .replace(/\]\[/g, '• ')  // Replace '][' with bullet points
+        .replace(/[\[\]]/g, '') // Remove brackets
+        .replace(/WPA2-PSK-CCMP/g, '<span class="security-highlight">WPA2</span>') // Highlight main parts
+        .replace(/WPA-PSK-CCMP/g, '<span class="security-highlight">WPA</span>')
+        .replace(/RSN-PSK-CCMP/g, '<span class="security-highlight">RSN</span>')
+        .replace(/RSN-SAE-CCMP/g, '<span class="security-highlight wpa3">WPA3</span>')
+        .replace(/ESS/g, '<span class="security-tag">ESS</span>')
+        .replace(/WPS/g, '<span class="security-tag wps">WPS</span>')
+        .replace(/MFPC/g, '<span class="security-tag mfpc">MFPC</span>');
 } 

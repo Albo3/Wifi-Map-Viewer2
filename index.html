@@ -18,10 +18,8 @@
     <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-    <div class="header">
-        <h1>WiFi Map Viewer</h1>
-    </div>
-
+    <!-- Header removed to maximize space -->
+    
     <div class="controls">
         <div class="file-input-wrapper">
             <button class="file-input-button">Choose File</button>
@@ -30,31 +28,54 @@
         
         <div class="search-container">
             <input type="text" id="search" placeholder="Search by SSID...">
+            <div id="searchCount" class="search-results"></div>
+            <div id="searchResults" class="search-results-dropdown"></div>
         </div>
         
-        <button class="btn btn-success" id="saveDbBtn">Save DB</button>
-        <button class="btn btn-primary" id="addNoteBtn">Add Note</button>
-        <button class="btn btn-info" id="dbInfoBtn">DB Info</button>
-        <button class="btn btn-primary" id="mergeDbBtn">Merge DB</button>
-    </div>
-
-    <div class="stats">
-        <span>Total Networks: <strong id="totalNetworks">1820</strong></span> | 
-        <span>Networks with Notes: <strong id="networksWithNotes">2</strong></span>
+        <div class="stats-inline">
+            <div id="dbStats">
+                <!-- This is where the actual stats (Total Networks: 1920, Networks with Notes: 3) are displayed -->
+            </div>
+        </div>
+        
+        <div class="control-buttons">
+            <button class="btn btn-success" id="saveDbBtn">Save DB</button>
+            <button class="btn btn-primary" id="addNoteBtn" disabled>Add Note</button>
+            <button class="btn btn-info" id="dbInfoBtn">DB Info</button>
+            <button class="btn btn-primary" id="mergeDbBtn">Merge DB</button>
+        </div>
     </div>
 
     <div id="map"></div>
 
-    <!-- Add this after the controls div -->
+    <div id="noteEditor" style="display: none;" class="note-editor">
+        <div class="note-editor-header">
+            <h3>Add/Edit Note for</h3>
+            <span id="networkNameDisplay" class="network-name">Network Name</span>
+            <button class="note-close-btn" id="noteCloseBtn">&times;</button>
+        </div>
+        <div class="note-editor-content">
+            <textarea id="networkNote" placeholder="Enter network notes here..."></textarea>
+        </div>
+        <div class="note-editor-footer">
+            <button id="cancelNoteBtn" class="note-btn note-btn-cancel">Cancel</button>
+            <button id="saveNoteBtn" class="note-btn note-btn-save">Save Note</button>
+        </div>
+    </div>
+
     <div id="dbInfoPanel" class="info-panel" style="display: none;">
-        <h3>Database Information</h3>
+        <div class="info-panel-header">
+            <h3>Database Information</h3>
+            <button class="info-close-btn" id="infoCloseBtn">&times;</button>
+        </div>
         <div class="info-content">
             <div id="detailedDbStats"></div>
         </div>
-        <button id="closeInfoBtn">Close</button>
+        <div class="info-panel-footer">
+            <button id="closeInfoBtn">Close</button>
+        </div>
     </div>
 
-    <!-- Load our custom JavaScript -->
     <script src="masterdb.js"></script>
     <script src="script.js"></script>
 </body>
