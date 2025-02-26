@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiFi Map Viewer</title>
+    <!-- External libraries -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    
+    <!-- Marker Cluster Plugin -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+    
+    <!-- Our custom styles and scripts -->
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <div class="header">
+        <h1>WiFi Map Viewer</h1>
+    </div>
+
+    <div class="controls">
+        <div class="file-input-wrapper">
+            <button class="file-input-button">Choose File</button>
+            <input type="file" id="fileInput">
+        </div>
+        
+        <div class="search-container">
+            <input type="text" id="search" placeholder="Search by SSID...">
+        </div>
+        
+        <button class="btn btn-success" id="saveDbBtn">Save DB</button>
+        <button class="btn btn-primary" id="addNoteBtn">Add Note</button>
+        <button class="btn btn-info" id="dbInfoBtn">DB Info</button>
+        <button class="btn btn-primary" id="mergeDbBtn">Merge DB</button>
+    </div>
+
+    <div class="stats">
+        <span>Total Networks: <strong id="totalNetworks">1820</strong></span> | 
+        <span>Networks with Notes: <strong id="networksWithNotes">2</strong></span>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Add this after the controls div -->
+    <div id="dbInfoPanel" class="info-panel" style="display: none;">
+        <h3>Database Information</h3>
+        <div class="info-content">
+            <div id="detailedDbStats"></div>
+        </div>
+        <button id="closeInfoBtn">Close</button>
+    </div>
+
+    <!-- Load our custom JavaScript -->
+    <script src="masterdb.js"></script>
+    <script src="script.js"></script>
+</body>
+</html> 

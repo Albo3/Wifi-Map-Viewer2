@@ -1,0 +1,521 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Roboto', 'Open Sans', sans-serif;
+    color: #e0e0e0;
+    background-color: #232931;
+}
+
+/* Improve map container styling */
+#map { 
+    height: calc(100vh - 130px);
+    width: 100%;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Style the file input and header */
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 10px 15px;
+    background-color: #2d3436;
+    border-bottom: 1px solid #40444b;
+    gap: 10px;
+}
+
+.controls h1 {
+    margin: 0;
+    font-size: 1.6rem;
+    font-weight: 500;
+}
+
+/* Create a flex container for the controls */
+.controls-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+/* Style for file input */
+.file-controls {
+    flex: 1;
+    min-width: 200px;
+}
+
+/* Style for search container */
+.search-container {
+    flex-grow: 1;
+}
+
+#search {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #40444b;
+    border-radius: 4px;
+    font-size: 14px;
+    background-color: #3d4852;
+    color: #ecf0f1;
+}
+
+#search::placeholder {
+    color: #95a5a6;
+}
+
+/* Style for database controls */
+.db-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.db-controls button {
+    padding: 8px 12px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.db-controls button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+
+.db-controls button:hover:not(:disabled) {
+    background-color: #45a049;
+}
+
+/* Style for note editor */
+#noteEditor {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #f5f5f5;
+    border-radius: 8px;
+}
+
+#networkNote {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.note-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+/* Style for custom popup */
+.custom-popup {
+    font-size: 14px;
+    line-height: 1.4;
+    min-width: 200px;
+}
+
+.signal-strength {
+    margin-top: 5px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    display: inline-block;
+}
+
+.good { background-color: #c8e6c9; }
+.medium { background-color: #fff3c4; }
+.poor { background-color: #ffcdd2; }
+
+/* Style for highlighted markers */
+.highlighted-marker circle {
+    stroke: #ff0000 !important;
+    stroke-width: 3px !important;
+}
+
+/* Enhanced popup styling */
+.popup-row {
+    margin: 5px 0;
+    display: flex;
+    justify-content: space-between;
+}
+
+.popup-label {
+    color: #666;
+    font-size: 12px;
+}
+
+/* Add styles for networks with notes */
+.has-note {
+    position: relative;
+}
+
+.has-note::after {
+    content: '';
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 8px;
+    height: 8px;
+    background-color: #3F51B5;
+    border-radius: 50%;
+    border: 1px solid white;
+}
+
+/* Add these styles for database management */
+.db-management {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.db-stats {
+    font-size: 12px;
+    color: #666;
+    margin-top: 5px;
+}
+
+.info-panel {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    padding: 15px;
+    z-index: 1000;
+    max-width: 300px;
+}
+
+.info-content {
+    margin: 10px 0;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+#closeInfoBtn {
+    width: 100%;
+    padding: 8px;
+    background-color: #f5f5f5;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#closeInfoBtn:hover {
+    background-color: #e0e0e0;
+}
+
+/* Custom marker cluster styles */
+.marker-cluster {
+    background-color: rgba(255, 152, 0, 0.7);
+    border: 2px solid rgba(255, 152, 0, 0.2);
+    border-radius: 50%;
+    text-align: center;
+    color: white;
+    font-weight: bold;
+}
+
+.marker-green {
+    background-color: rgba(46, 204, 113, 0.8);
+}
+
+.marker-yellow {
+    background-color: rgba(241, 196, 15, 0.8);
+}
+
+.marker-red {
+    background-color: rgba(231, 76, 60, 0.8);
+}
+
+/* Animate the spiderfy effect */
+.leaflet-marker-icon.leaflet-marker-icon-anim {
+    transition: transform 0.25s ease-out;
+}
+
+/* Highlighted markers with clustering */
+.leaflet-cluster-anim .leaflet-marker-icon:not(.marker-cluster) {
+    transition: transform 0.25s, opacity 0.25s;
+}
+
+/* Style for spiderfied markers */
+.marker-highlight-spider {
+    border: 3px solid #ff0000 !important;
+    box-shadow: 0 0 10px rgba(255, 0, 0, 0.5) !important;
+    z-index: 1000 !important;
+    transition: transform 0.2s;
+}
+
+.marker-highlight-spider:hover {
+    transform: scale(1.2);
+}
+
+/* SSID Tooltip styling */
+.network-tooltip {
+    background-color: rgba(0, 0, 0, 0.7);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-weight: bold;
+    padding: 5px 8px;
+    font-size: 12px;
+    white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.network-tooltip:before {
+    border-top-color: rgba(0, 0, 0, 0.7);
+}
+
+/* Ensure tooltips appear above other elements */
+.leaflet-tooltip-pane {
+    z-index: 1000 !important;
+}
+
+/* Buttons */
+.btn {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.btn-success {
+    background-color: #27ae60;
+    color: white;
+}
+
+.btn-success:hover {
+    background-color: #2ecc71;
+}
+
+.btn-primary {
+    background-color: #3498db;
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #2980b9;
+}
+
+.btn-info {
+    background-color: #8e44ad;
+    color: white;
+}
+
+.btn-info:hover {
+    background-color: #9b59b6;
+}
+
+/* Stats panel */
+.stats {
+    background-color: #2d3436;
+    color: #ecf0f1;
+    padding: 8px 15px;
+    font-size: 13px;
+    border-bottom: 1px solid #40444b;
+}
+
+.stats strong {
+    color: #f39c12;
+}
+
+/* File input styling */
+.file-input-wrapper {
+    position: relative;
+    overflow: hidden;
+    display: inline-block;
+}
+
+.file-input-wrapper input[type=file] {
+    position: absolute;
+    left: 0;
+    top: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.file-input-button {
+    background-color: #34495e;
+    color: #ecf0f1;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.file-input-button:hover {
+    background-color: #2c3e50;
+}
+
+/* Updated styles with dark mode / eye-friendly colors */
+body {
+    font-family: 'Roboto', 'Open Sans', sans-serif;
+    margin: 0;
+    padding: 0;
+    color: #e0e0e0;
+    background-color: #232931;
+}
+
+/* Header styling - darker theme */
+.header {
+    background-color: #1a1f25;
+    color: #ecf0f1;
+    padding: 15px 20px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 1.6rem;
+    font-weight: 500;
+}
+
+/* Control panel - darker theme */
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 10px 15px;
+    background-color: #2d3436;
+    border-bottom: 1px solid #40444b;
+    gap: 10px;
+}
+
+/* Search box */
+.search-container {
+    flex-grow: 1;
+}
+
+#search {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #40444b;
+    border-radius: 4px;
+    font-size: 14px;
+    background-color: #3d4852;
+    color: #ecf0f1;
+}
+
+#search::placeholder {
+    color: #95a5a6;
+}
+
+/* Buttons */
+.btn {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.btn-success {
+    background-color: #27ae60;
+    color: white;
+}
+
+.btn-success:hover {
+    background-color: #2ecc71;
+}
+
+.btn-primary {
+    background-color: #3498db;
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #2980b9;
+}
+
+.btn-info {
+    background-color: #8e44ad;
+    color: white;
+}
+
+.btn-info:hover {
+    background-color: #9b59b6;
+}
+
+/* Stats panel */
+.stats {
+    background-color: #2d3436;
+    color: #ecf0f1;
+    padding: 8px 15px;
+    font-size: 13px;
+    border-bottom: 1px solid #40444b;
+}
+
+.stats strong {
+    color: #f39c12;
+}
+
+/* Map container */
+#map {
+    height: calc(100vh - 130px);
+    width: 100%;
+}
+
+/* Add this to use a darker map tile */
+.leaflet-container {
+    background-color: #2d3436;
+}
+
+/* Map markers - softer colors */
+.marker-cluster {
+    background-color: rgba(255, 152, 0, 0.7);
+    border: 2px solid rgba(255, 152, 0, 0.2);
+    border-radius: 50%;
+    text-align: center;
+    color: white;
+    font-weight: bold;
+}
+
+.marker-green {
+    background-color: rgba(46, 204, 113, 0.8);
+}
+
+.marker-yellow {
+    background-color: rgba(241, 196, 15, 0.8);
+}
+
+.marker-red {
+    background-color: rgba(231, 76, 60, 0.8);
+}
+
+/* File input styling */
+.file-input-wrapper {
+    position: relative;
+    overflow: hidden;
+    display: inline-block;
+}
+
+.file-input-wrapper input[type=file] {
+    position: absolute;
+    left: 0;
+    top: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.file-input-button {
+    background-color: #34495e;
+    color: #ecf0f1;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.file-input-button:hover {
+    background-color: #2c3e50;
+} 
