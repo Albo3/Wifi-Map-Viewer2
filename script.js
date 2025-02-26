@@ -1,10 +1,26 @@
 // Add these at the top
 let map, markers = [], selectedNetwork = null, markerCluster = null;
 let saveDbBtn, addNoteBtn, noteEditor, networkNote, saveNoteBtn, cancelNoteBtn;
+let storageAvailable = true;
 
 // Initialize on DOM content loaded
 document.addEventListener('DOMContentLoaded', async function() {
     console.log("DOM loaded, initializing map...");
+    
+    // Check if storage is available
+    try {
+        // Test IndexedDB availability
+        const testDb = indexedDB.open('test-db');
+        testDb.onerror = function() {
+            console.error("IndexedDB access denied - storage will not persist");
+            storageAvailable = false;
+            // Show warning to user
+            showStorageWarning();
+        };
+    } catch (e) {
+        console.error("Error checking storage:", e);
+        storageAvailable = false;
+    }
     
     // Check if masterDb is defined
     if (typeof window.masterDb === 'undefined') {
@@ -692,6 +708,35 @@ function initEventListeners() {
     document.getElementById('closeInfoBtn').addEventListener('click', function() {
         document.getElementById('dbInfoPanel').style.display = 'none';
     });
+
+    // Add event listener for clear cache button
+    document.getElementById('clearCacheBtn').addEventListener('click', async function() {
+        if (confirm("This will clear all stored data including notes. Continue?")) {
+            try {
+                // Delete the database
+                await new Promise((resolve, reject) => {
+                    const request = indexedDB.deleteDatabase('WifiMapMaster');
+                    request.onsuccess = () => {
+                        console.log("Database deleted successfully");
+                        resolve();
+                    };
+                    request.onerror = () => {
+                        console.error("Error deleting database");
+                        reject();
+                    };
+                });
+                
+                // Clear localStorage too
+                localStorage.clear();
+                
+                alert("Cache cleared. The page will now reload.");
+                location.reload();
+            } catch (e) {
+                console.error("Error clearing cache:", e);
+                alert("Error clearing cache: " + e.message);
+            }
+        }
+    });
 }
 
 // Update marker behavior to only show names on mouseover
@@ -828,4 +873,23 @@ function formatSecurityType(security) {
         .replace(/ESS/g, '<span class="security-tag">ESS</span>')
         .replace(/WPS/g, '<span class="security-tag wps">WPS</span>')
         .replace(/MFPC/g, '<span class="security-tag mfpc">MFPC</span>');
+}
+
+// Function to show storage warning
+function showStorageWarning() {
+    const warning = document.createElement('div');
+    warning.className = 'storage-warning';
+    warning.innerHTML = `
+        <div class="warning-content">
+            <strong>Warning:</strong> Storage access is restricted. 
+            Your notes and database changes will not persist after page reload.
+            <button class="close-warning">×</button>
+        </div>
+    `;
+    document.body.appendChild(warning);
+    
+    // Add close button handler
+    warning.querySelector('.close-warning').addEventListener('click', function() {
+        warning.style.display = 'none';
+    });
 } 

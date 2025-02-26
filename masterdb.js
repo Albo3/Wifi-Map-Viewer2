@@ -4,43 +4,67 @@ class MasterDatabase {
         this.db = null;
         this.dbName = 'WifiMapMaster';
         this.dbVersion = 1;
+        this.usingMemoryStorage = false;
+        this.memoryStorage = null;
     }
 
     // Initialize the database
     async init() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.dbName, this.dbVersion);
-            
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
+            try {
+                const request = indexedDB.open(this.dbName, this.dbVersion);
                 
-                // Create network store
-                if (!db.objectStoreNames.contains('networks')) {
-                    const networkStore = db.createObjectStore('networks', { keyPath: 'ssid' });
-                    networkStore.createIndex('type', 'type', { unique: false });
-                    networkStore.createIndex('security', 'capabilities', { unique: false });
-                }
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    
+                    // Create network store
+                    if (!db.objectStoreNames.contains('networks')) {
+                        const networkStore = db.createObjectStore('networks', { keyPath: 'ssid' });
+                        networkStore.createIndex('type', 'type', { unique: false });
+                        networkStore.createIndex('security', 'capabilities', { unique: false });
+                    }
+                    
+                    // Create notes store
+                    if (!db.objectStoreNames.contains('notes')) {
+                        db.createObjectStore('notes', { keyPath: 'ssid' });
+                    }
+                    
+                    // Create metadata store
+                    if (!db.objectStoreNames.contains('metadata')) {
+                        db.createObjectStore('metadata', { keyPath: 'key' });
+                    }
+                };
                 
-                // Create notes store
-                if (!db.objectStoreNames.contains('notes')) {
-                    db.createObjectStore('notes', { keyPath: 'ssid' });
-                }
+                request.onsuccess = (event) => {
+                    this.db = event.target.result;
+                    console.log("IndexedDB initialized successfully");
+                    resolve(this.db);
+                };
                 
-                // Create metadata store
-                if (!db.objectStoreNames.contains('metadata')) {
-                    db.createObjectStore('metadata', { keyPath: 'key' });
-                }
-            };
-            
-            request.onsuccess = (event) => {
-                this.db = event.target.result;
-                resolve(this.db);
-            };
-            
-            request.onerror = (event) => {
-                reject(`Database error: ${event.target.error}`);
-            };
+                request.onerror = (event) => {
+                    console.error("IndexedDB error:", event.target.error);
+                    // Fall back to memory-only storage
+                    this.useMemoryStorage();
+                    resolve(null);
+                };
+            } catch (e) {
+                console.error("Error initializing IndexedDB:", e);
+                // Fall back to memory-only storage
+                this.useMemoryStorage();
+                resolve(null);
+            }
         });
+    }
+
+    // Add memory storage fallback
+    useMemoryStorage() {
+        console.log("Using in-memory storage (changes won't persist)");
+        this.memoryStorage = {
+            networks: new Map(),
+            notes: new Map(),
+            metadata: new Map()
+        };
+        this.usingMemoryStorage = true;
     }
 
     // Import data from a WiGLE SQLite database
@@ -235,30 +259,38 @@ class MasterDatabase {
 
     // Save a note for a network
     async saveNote(ssid, note) {
-        if (!this.db) await this.init();
+        if (!this.db && !this.usingMemoryStorage) await this.init();
         
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction('notes', 'readwrite');
-            const noteStore = tx.objectStore('notes');
-            
-            // Normalize the SSID to ensure consistent keys
-            const normalizedSsid = this.normalizeSsid(ssid);
-            
-            const noteObj = {
-                ssid: normalizedSsid,
-                originalSsid: ssid, // Store the original for display
-                note: note,
-                timestamp: Date.now()
-            };
-            
-            const request = noteStore.put(noteObj);
-            
-            request.onsuccess = () => {
-                console.log(`Note saved for network: ${normalizedSsid}`);
-                resolve();
-            };
-            request.onerror = () => reject(`Error saving note: ${request.error}`);
-        });
+        // Normalize the SSID
+        const normalizedSsid = this.normalizeSsid(ssid);
+        
+        const noteObj = {
+            ssid: normalizedSsid,
+            originalSsid: ssid,
+            note: note,
+            timestamp: Date.now()
+        };
+        
+        if (this.usingMemoryStorage) {
+            // Use in-memory storage
+            this.memoryStorage.notes.set(normalizedSsid, noteObj);
+            console.log(`Note saved in memory for: ${normalizedSsid}`);
+            return Promise.resolve();
+        } else {
+            // Use IndexedDB as before
+            return new Promise((resolve, reject) => {
+                const tx = this.db.transaction('notes', 'readwrite');
+                const noteStore = tx.objectStore('notes');
+                
+                const request = noteStore.put(noteObj);
+                
+                request.onsuccess = () => {
+                    console.log(`Note saved for network: ${normalizedSsid}`);
+                    resolve();
+                };
+                request.onerror = () => reject(`Error saving note: ${request.error}`);
+            });
+        }
     }
 
     // Helper method to normalize SSIDs for consistent key usage
