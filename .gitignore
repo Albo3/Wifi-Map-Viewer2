@@ -2,7 +2,7 @@
 *.sqlite
 *.db
 *.sqlite3
-
+*.exe
 # Temporary files
 *.tmp
 *.temp
