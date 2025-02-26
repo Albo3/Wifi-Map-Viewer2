@@ -205,7 +205,9 @@ class MasterDatabase {
             notesRequest.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (cursor) {
-                    notesMap.set(cursor.value.ssid, cursor.value.note);
+                    // Store with normalized SSID as key
+                    const normalizedSsid = this.normalizeSsid(cursor.value.ssid);
+                    notesMap.set(normalizedSsid, cursor.value.note);
                     cursor.continue();
                 } else {
                     // Then get all networks
@@ -214,10 +216,13 @@ class MasterDatabase {
                         const cursor = event.target.result;
                         if (cursor) {
                             const network = cursor.value;
-                            network.note = notesMap.get(network.ssid) || '';
+                            // Look up note using normalized SSID
+                            const normalizedSsid = this.normalizeSsid(network.ssid);
+                            network.note = notesMap.get(normalizedSsid) || '';
                             networks.push(network);
                             cursor.continue();
                         } else {
+                            console.log(`Retrieved ${networks.length} networks, ${notesMap.size} with notes`);
                             resolve(networks);
                         }
                     };
@@ -236,17 +241,33 @@ class MasterDatabase {
             const tx = this.db.transaction('notes', 'readwrite');
             const noteStore = tx.objectStore('notes');
             
+            // Normalize the SSID to ensure consistent keys
+            const normalizedSsid = this.normalizeSsid(ssid);
+            
             const noteObj = {
-                ssid: ssid,
+                ssid: normalizedSsid,
+                originalSsid: ssid, // Store the original for display
                 note: note,
                 timestamp: Date.now()
             };
             
             const request = noteStore.put(noteObj);
             
-            request.onsuccess = () => resolve();
+            request.onsuccess = () => {
+                console.log(`Note saved for network: ${normalizedSsid}`);
+                resolve();
+            };
             request.onerror = () => reject(`Error saving note: ${request.error}`);
         });
+    }
+
+    // Helper method to normalize SSIDs for consistent key usage
+    normalizeSsid(ssid) {
+        // Handle null or undefined SSIDs
+        if (!ssid) return '';
+        
+        // Trim whitespace and convert to string
+        return String(ssid).trim();
     }
 
     // Get database statistics
@@ -314,7 +335,7 @@ class MasterDatabase {
         });
     }
 
-    // Export the entire database as a SQLite file
+    // Export the entire database as a SQLite file - improve note handling
     async exportToSQLite() {
         if (!this.db) await this.init();
         
@@ -368,22 +389,25 @@ class MasterDatabase {
         
         insertStmt.free();
         
-        // Insert notes
+        // Insert notes - only for networks that actually have notes
         const noteStmt = exportDb.prepare(`
             INSERT INTO network_notes (ssid, note, timestamp)
             VALUES (?, ?, ?);
         `);
         
+        let noteCount = 0;
         networks.forEach(network => {
-            if (network.note) {
+            if (network.note && network.note.trim() !== '') {
                 noteStmt.run([
                     network.ssid,
                     network.note,
                     Date.now()
                 ]);
+                noteCount++;
             }
         });
         
+        console.log(`Exported ${networks.length} networks and ${noteCount} notes`);
         noteStmt.free();
         
         // Export the database to a binary array
