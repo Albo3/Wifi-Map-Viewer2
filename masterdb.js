@@ -197,6 +197,9 @@ class MasterDatabase {
                         const newLevel = network[8];
                         const newAccuracy = network[9];
                         const observations = network[10];
+                        // Get note data from our saved format
+                        const note = network[12];  // Index for note in our saved format
+                        const noteTimestamp = network[13];  // Index for note_timestamp
                         
                         // Check if network exists
                         const existing = this.db.exec(`
@@ -208,7 +211,7 @@ class MasterDatabase {
                         );
                         
                         if (existing && existing.length > 0 && existing[0].values.length > 0) {
-                            // Update existing network with better position data
+                            // Update existing network with better position data and preserve notes
                             this.db.run(`
                                 UPDATE network 
                                 SET lastlat = ?,
@@ -221,28 +224,33 @@ class MasterDatabase {
                                     capabilities = ?,
                                     type = ?,
                                     accuracy = ?,
-                                    bestAccuracy = ?
+                                    bestAccuracy = ?,
+                                    note = COALESCE(?, note),
+                                    note_timestamp = COALESCE(?, note_timestamp)
                                 WHERE bssid = ?`,
                                 [newLat, newLon, newLevel, observations,
                                  network[4], network[1], network[2], network[3],
                                  network[7], newAccuracy, 
                                  Math.min(existing[0].values[0][5] || Infinity, newAccuracy),
+                                 note, noteTimestamp,  // Add note data to update
                                  bssid]
                             );
                             stats.updated++;
+                            if (note) stats.notes++;
                         } else {
-                            // Insert new network
+                            // Insert new network with notes
                             this.db.run(`
                                 INSERT INTO network 
                                 (bssid, ssid, frequency, capabilities, lasttime,
                                  lastlat, lastlon, type, bestlevel, observations,
-                                 accuracy, bestAccuracy)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                 accuracy, bestAccuracy, note, note_timestamp)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                                 [bssid, network[1], network[2], network[3], network[4],
                                  newLat, newLon, network[7], newLevel, observations,
-                                 newAccuracy, newAccuracy]
+                                 newAccuracy, newAccuracy, note, noteTimestamp]  // Include note data in insert
                             );
                             stats.added++;
+                            if (note) stats.notes++;
                         }
                     } catch (e) {
                         console.error('Error processing network:', e, network);
@@ -428,11 +436,13 @@ class MasterDatabase {
                 WHERE lastlat IS NOT NULL AND lastlon IS NOT NULL`
             );
             
-            // Get networks with notes count
+            // Get networks with notes count - updated query
             const notesCount = this.db.exec(`
                 SELECT COUNT(*) as count 
                 FROM network
-                WHERE note IS NOT NULL AND note != ''`
+                WHERE note IS NOT NULL 
+                  AND note != ''
+                  AND note_timestamp IS NOT NULL`
             );
             
             // Get network types
