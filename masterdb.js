@@ -62,87 +62,113 @@ class MasterDatabase {
             
             const importDb = new this.SQL.Database(new Uint8Array(sqliteData));
             
-            // First, get networks with their most recent location data
-            const networks = importDb.exec(`
-                WITH best_locations AS (
+            // Check if this is a WiGLE database (has location table) or our exported database
+            let isWigleDb = false;
+            try {
+                const tables = importDb.exec(`SELECT name FROM sqlite_master WHERE type='table'`);
+                isWigleDb = tables[0].values.some(([name]) => name === 'location');
+            } catch (e) {
+                console.log('Error checking tables:', e);
+            }
+
+            let networks;
+            
+            if (isWigleDb) {
+                // Use the existing WiGLE import query with location table
+                networks = importDb.exec(`
+                    WITH best_locations AS (
+                        SELECT 
+                            bssid,
+                            lat, lon, level, accuracy,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY bssid 
+                                ORDER BY accuracy ASC, ABS(level) ASC
+                            ) as quality_rank
+                        FROM location
+                        WHERE lat IS NOT NULL AND lon IS NOT NULL
+                    ),
+                    location_stats AS (
+                        SELECT 
+                            bssid,
+                            AVG(lat) as avg_lat,
+                            AVG(lon) as avg_lon,
+                            MIN(accuracy) as best_accuracy,
+                            MAX(level) as best_level,
+                            COUNT(*) as observation_count
+                        FROM best_locations
+                        WHERE quality_rank <= 3
+                        GROUP BY bssid
+                    ),
+                    network_groups AS (
+                        SELECT 
+                            n.ssid,
+                            FIRST_VALUE(n.bssid) OVER (
+                                PARTITION BY n.ssid 
+                                ORDER BY COALESCE(l.best_level, n.bestlevel) DESC
+                            ) as primary_bssid,
+                            COUNT(DISTINCT n.bssid) as ap_count
+                        FROM network n
+                        LEFT JOIN location_stats l ON n.bssid = l.bssid
+                        GROUP BY n.ssid
+                    )
                     SELECT 
-                        bssid,
-                        lat, lon, level, accuracy,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY bssid 
-                            ORDER BY accuracy ASC, ABS(level) ASC
-                        ) as quality_rank
-                    FROM location
-                    WHERE lat IS NOT NULL AND lon IS NOT NULL
-                ),
-                location_stats AS (
-                    SELECT 
-                        bssid,
-                        AVG(lat) as avg_lat,
-                        AVG(lon) as avg_lon,
-                        MIN(accuracy) as best_accuracy,
-                        MAX(level) as best_level,
-                        COUNT(*) as observation_count
-                    FROM best_locations
-                    WHERE quality_rank <= 3
-                    GROUP BY bssid
-                ),
-                -- Add grouping for same-name networks
-                network_groups AS (
-                    SELECT 
+                        n.bssid,
                         n.ssid,
-                        -- Take the BSSID with the strongest signal
-                        FIRST_VALUE(n.bssid) OVER (
-                            PARTITION BY n.ssid 
-                            ORDER BY COALESCE(l.best_level, n.bestlevel) DESC
-                        ) as primary_bssid,
-                        COUNT(DISTINCT n.bssid) as ap_count
+                        n.frequency,
+                        n.capabilities,
+                        n.lasttime,
+                        COALESCE(l.avg_lat, n.lastlat) as lastlat,
+                        COALESCE(l.avg_lon, n.lastlon) as lastlon,
+                        n.type,
+                        COALESCE(l.best_level, n.bestlevel) as bestlevel,
+                        COALESCE(l.best_accuracy, 0) as accuracy,
+                        COALESCE(l.observation_count, 1) as observations,
+                        g.ap_count as access_points
                     FROM network n
                     LEFT JOIN location_stats l ON n.bssid = l.bssid
+                    LEFT JOIN network_groups g ON n.ssid = g.ssid
+                    WHERE n.bssid IS NOT NULL
+                      AND COALESCE(l.avg_lat, n.lastlat) IS NOT NULL
+                      AND COALESCE(l.avg_lon, n.lastlon) IS NOT NULL
+                      AND n.bssid = g.primary_bssid
                     GROUP BY n.ssid
-                )
-                SELECT 
-                    n.bssid,
-                    n.ssid,
-                    n.frequency,
-                    n.capabilities,
-                    n.lasttime,
-                    COALESCE(l.avg_lat, n.lastlat) as lastlat,
-                    COALESCE(l.avg_lon, n.lastlon) as lastlon,
-                    n.type,
-                    COALESCE(l.best_level, n.bestlevel) as bestlevel,
-                    COALESCE(l.best_accuracy, 0) as accuracy,
-                    COALESCE(l.observation_count, 1) as observations,
-                    g.ap_count as access_points
-                FROM network n
-                LEFT JOIN location_stats l ON n.bssid = l.bssid
-                LEFT JOIN network_groups g ON n.ssid = g.ssid
-                WHERE n.bssid IS NOT NULL
-                  AND COALESCE(l.avg_lat, n.lastlat) IS NOT NULL
-                  AND COALESCE(l.avg_lon, n.lastlon) IS NOT NULL
-                  -- Only take the primary BSSID for each SSID
-                  AND n.bssid = g.primary_bssid
-                GROUP BY n.ssid  -- Group by SSID instead of BSSID
-            `);
-            
-            if (!networks || networks.length === 0) {
-                // Try simpler query if the above fails
+                `);
+            } else {
+                // Import from our exported database format
                 networks = importDb.exec(`
+                    WITH network_groups AS (
+                        SELECT 
+                            ssid,
+                            FIRST_VALUE(bssid) OVER (
+                                PARTITION BY ssid 
+                                ORDER BY bestlevel DESC
+                            ) as primary_bssid,
+                            COUNT(DISTINCT bssid) as ap_count
+                        FROM network
+                        GROUP BY ssid
+                    )
                     SELECT 
-                        COALESCE(bssid, mac) as device_id,
-                        ssid,
-                        frequency,
-                        capabilities,
-                        lasttime, 
-                        lastlat,
-                        lastlon,
-                        type,
-                        bestlevel,
-                        0 as accuracy
-                    FROM network
-                    WHERE lastlat IS NOT NULL 
-                      AND lastlon IS NOT NULL
-                      AND COALESCE(bssid, mac) IS NOT NULL
+                        n.bssid,
+                        n.ssid,
+                        n.frequency,
+                        n.capabilities,
+                        n.lasttime,
+                        n.lastlat,
+                        n.lastlon,
+                        n.type,
+                        n.bestlevel,
+                        n.accuracy,
+                        n.observations,
+                        g.ap_count as access_points,
+                        n.note,
+                        n.note_timestamp
+                    FROM network n
+                    LEFT JOIN network_groups g ON n.ssid = g.ssid
+                    WHERE n.bssid IS NOT NULL
+                      AND n.lastlat IS NOT NULL
+                      AND n.lastlon IS NOT NULL
+                      AND n.bssid = g.primary_bssid
+                    GROUP BY n.ssid
                 `);
             }
             
