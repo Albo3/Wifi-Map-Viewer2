@@ -21,7 +21,7 @@ class MasterDatabase {
                     // Create new database if none exists
                     this.db = new this.SQL.Database();
                     
-                    // Create base network table
+                    // Create base network table with all needed columns
                     this.db.run(`
                         CREATE TABLE network (
                             bssid TEXT PRIMARY KEY NOT NULL,
@@ -32,18 +32,14 @@ class MasterDatabase {
                             lastlat REAL NOT NULL,
                             lastlon REAL NOT NULL,
                             type TEXT NOT NULL DEFAULT 'W',
-                            bestlevel INTEGER NOT NULL DEFAULT 0
+                            bestlevel INTEGER NOT NULL DEFAULT 0,
+                            observations INTEGER DEFAULT 1,
+                            accuracy FLOAT DEFAULT 0,
+                            bestAccuracy FLOAT DEFAULT 0,
+                            note TEXT,
+                            note_timestamp INTEGER
                         )
                     `);
-                    
-                    // Add note columns separately
-                    try {
-                        this.db.run(`ALTER TABLE network ADD COLUMN note TEXT`);
-                        this.db.run(`ALTER TABLE network ADD COLUMN note_timestamp INTEGER`);
-                    } catch (e) {
-                        // Columns might already exist
-                        console.log('Note columns might already exist');
-                    }
                 }
             }
             
@@ -66,23 +62,89 @@ class MasterDatabase {
             
             const importDb = new this.SQL.Database(new Uint8Array(sqliteData));
             
-            // First check if our network table has the note columns
-            try {
-                // Try to add note columns - if they exist, this will fail silently
-                this.db.run(`ALTER TABLE network ADD COLUMN note TEXT`);
-                this.db.run(`ALTER TABLE network ADD COLUMN note_timestamp INTEGER`);
-            } catch (e) {
-                // Column might already exist, that's fine
-                console.log('Note columns might already exist');
-            }
-            
-            // Import networks
+            // First, get networks with their most recent location data
             const networks = importDb.exec(`
-                SELECT bssid, ssid, frequency, capabilities, lasttime, 
-                       lastlat, lastlon, type, bestlevel
-                FROM network
-                WHERE lastlat IS NOT NULL AND lastlon IS NOT NULL`
-            );
+                WITH best_locations AS (
+                    SELECT 
+                        bssid,
+                        lat, lon, level, accuracy,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY bssid 
+                            ORDER BY accuracy ASC, ABS(level) ASC
+                        ) as quality_rank
+                    FROM location
+                    WHERE lat IS NOT NULL AND lon IS NOT NULL
+                ),
+                location_stats AS (
+                    SELECT 
+                        bssid,
+                        AVG(lat) as avg_lat,
+                        AVG(lon) as avg_lon,
+                        MIN(accuracy) as best_accuracy,
+                        MAX(level) as best_level,
+                        COUNT(*) as observation_count
+                    FROM best_locations
+                    WHERE quality_rank <= 3
+                    GROUP BY bssid
+                ),
+                -- Add grouping for same-name networks
+                network_groups AS (
+                    SELECT 
+                        n.ssid,
+                        -- Take the BSSID with the strongest signal
+                        FIRST_VALUE(n.bssid) OVER (
+                            PARTITION BY n.ssid 
+                            ORDER BY COALESCE(l.best_level, n.bestlevel) DESC
+                        ) as primary_bssid,
+                        COUNT(DISTINCT n.bssid) as ap_count
+                    FROM network n
+                    LEFT JOIN location_stats l ON n.bssid = l.bssid
+                    GROUP BY n.ssid
+                )
+                SELECT 
+                    n.bssid,
+                    n.ssid,
+                    n.frequency,
+                    n.capabilities,
+                    n.lasttime,
+                    COALESCE(l.avg_lat, n.lastlat) as lastlat,
+                    COALESCE(l.avg_lon, n.lastlon) as lastlon,
+                    n.type,
+                    COALESCE(l.best_level, n.bestlevel) as bestlevel,
+                    COALESCE(l.best_accuracy, 0) as accuracy,
+                    COALESCE(l.observation_count, 1) as observations,
+                    g.ap_count as access_points
+                FROM network n
+                LEFT JOIN location_stats l ON n.bssid = l.bssid
+                LEFT JOIN network_groups g ON n.ssid = g.ssid
+                WHERE n.bssid IS NOT NULL
+                  AND COALESCE(l.avg_lat, n.lastlat) IS NOT NULL
+                  AND COALESCE(l.avg_lon, n.lastlon) IS NOT NULL
+                  -- Only take the primary BSSID for each SSID
+                  AND n.bssid = g.primary_bssid
+                GROUP BY n.ssid  -- Group by SSID instead of BSSID
+            `);
+            
+            if (!networks || networks.length === 0) {
+                // Try simpler query if the above fails
+                networks = importDb.exec(`
+                    SELECT 
+                        COALESCE(bssid, mac) as device_id,
+                        ssid,
+                        frequency,
+                        capabilities,
+                        lasttime, 
+                        lastlat,
+                        lastlon,
+                        type,
+                        bestlevel,
+                        0 as accuracy
+                    FROM network
+                    WHERE lastlat IS NOT NULL 
+                      AND lastlon IS NOT NULL
+                      AND COALESCE(bssid, mac) IS NOT NULL
+                `);
+            }
             
             if (!networks || networks.length === 0) {
                 console.log('No networks found in import database');
@@ -95,35 +157,82 @@ class MasterDatabase {
             this.db.run('BEGIN TRANSACTION');
             
             try {
-                // Import networks
+                // Process each network
                 networks[0].values.forEach(network => {
                     try {
-                        this.db.run(`
-                            INSERT OR REPLACE INTO network 
-                            (bssid, ssid, frequency, capabilities, lasttime, 
-                             lastlat, lastlon, type, bestlevel)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                            network
+                        const bssid = network[0];
+                        if (!bssid) {
+                            console.warn('Skipping network with no BSSID:', network);
+                            return;
+                        }
+
+                        const newLat = network[5];
+                        const newLon = network[6];
+                        const newLevel = network[8];
+                        const newAccuracy = network[9];
+                        const observations = network[10];
+                        
+                        // Check if network exists
+                        const existing = this.db.exec(`
+                            SELECT lastlat, lastlon, bestlevel, observations, 
+                                   accuracy, bestAccuracy, note, note_timestamp 
+                            FROM network 
+                            WHERE bssid = ?`, 
+                            [bssid]
                         );
-                        stats.added++;
+                        
+                        if (existing && existing.length > 0 && existing[0].values.length > 0) {
+                            // Update existing network with better position data
+                            this.db.run(`
+                                UPDATE network 
+                                SET lastlat = ?,
+                                    lastlon = ?,
+                                    bestlevel = ?,
+                                    observations = ?,
+                                    lasttime = MAX(lasttime, ?),
+                                    ssid = ?,
+                                    frequency = ?,
+                                    capabilities = ?,
+                                    type = ?,
+                                    accuracy = ?,
+                                    bestAccuracy = ?
+                                WHERE bssid = ?`,
+                                [newLat, newLon, newLevel, observations,
+                                 network[4], network[1], network[2], network[3],
+                                 network[7], newAccuracy, 
+                                 Math.min(existing[0].values[0][5] || Infinity, newAccuracy),
+                                 bssid]
+                            );
+                            stats.updated++;
+                        } else {
+                            // Insert new network
+                            this.db.run(`
+                                INSERT INTO network 
+                                (bssid, ssid, frequency, capabilities, lasttime,
+                                 lastlat, lastlon, type, bestlevel, observations,
+                                 accuracy, bestAccuracy)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                [bssid, network[1], network[2], network[3], network[4],
+                                 newLat, newLon, network[7], newLevel, observations,
+                                 newAccuracy, newAccuracy]
+                            );
+                            stats.added++;
+                        }
                     } catch (e) {
-                        console.error('Error inserting network:', e);
+                        console.error('Error processing network:', e, network);
                     }
                 });
                 
-                // Check if old notes table exists and import notes if it does
+                // Import notes if they exist
                 try {
-                    const notes = importDb.exec(`
-                        SELECT bssid, note, timestamp 
-                        FROM network_notes`
-                    );
-                    
+                    const notes = importDb.exec(`SELECT bssid, note, timestamp FROM network_notes`);
                     if (notes && notes.length > 0) {
                         notes[0].values.forEach(([bssid, note, timestamp]) => {
                             try {
                                 this.db.run(`
                                     UPDATE network 
-                                    SET note = ?, note_timestamp = ?
+                                    SET note = COALESCE(note, ?),
+                                        note_timestamp = COALESCE(note_timestamp, ?)
                                     WHERE bssid = ?`,
                                     [note, timestamp, bssid]
                                 );
@@ -134,23 +243,19 @@ class MasterDatabase {
                         });
                     }
                 } catch (e) {
-                    // network_notes table doesn't exist, that's fine for new databases
                     console.log('No notes table found in import database');
                 }
                 
                 this.db.run('COMMIT');
-                
-                // Save to localStorage after import
                 await this.saveToLocalStorage();
                 
-                console.log(`Import complete: ${stats.added} networks, ${stats.notes} notes`);
+                console.log(`Import complete: ${stats.added} added, ${stats.updated} updated, ${stats.notes} notes`);
+                return stats;
+                
             } catch (error) {
                 this.db.run('ROLLBACK');
                 throw error;
             }
-            
-            importDb.close();
-            return stats;
         } catch (error) {
             console.error('Error in importFromSQLite:', error);
             throw error;
@@ -300,7 +405,8 @@ class MasterDatabase {
             // Get networks with notes count
             const notesCount = this.db.exec(`
                 SELECT COUNT(*) as count 
-                FROM network_notes`
+                FROM network
+                WHERE note IS NOT NULL AND note != ''`
             );
             
             // Get network types
@@ -318,21 +424,19 @@ class MasterDatabase {
             );
 
             const stats = {
-                totalNetworks: networkCount[0].values[0][0],
-                networksWithNotes: notesCount[0].values[0][0],
+                totalNetworks: networkCount[0]?.values[0]?.[0] || 0,
+                networksWithNotes: notesCount[0]?.values[0]?.[0] || 0,
                 lastImport: new Date(),
                 networkTypes: {},
                 securityTypes: {}
             };
 
-            // Process network types
             if (types && types[0]) {
                 types[0].values.forEach(([type, count]) => {
                     stats.networkTypes[type || 'Unknown'] = count;
                 });
             }
 
-            // Process security types
             if (security && security[0]) {
                 security[0].values.forEach(([capabilities, count]) => {
                     stats.securityTypes[capabilities || 'Unknown'] = count;

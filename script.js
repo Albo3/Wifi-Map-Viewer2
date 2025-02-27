@@ -256,6 +256,12 @@ function displayNetworks(networks) {
                     <span class="popup-label">BSSID:</span>
                     <span>${network.bssid}</span>
                 </div>
+                ${network.access_points > 1 ? `
+                <div class="popup-row">
+                    <span class="popup-label">Access Points:</span>
+                    <span>${network.access_points} APs</span>
+                </div>
+                ` : ''}
                 <div class="popup-row">
                     <span class="signal-strength ${strengthClass}">
                         Signal: ${network.bestlevel} dBm (${strengthLabel})
