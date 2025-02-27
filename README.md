@@ -7,13 +7,25 @@ A powerful web-based application for visualizing and managing WiFi networks from
 ## Features
 
 - **Interactive Map Visualization**: Display WiFi networks on an interactive map with color-coded markers
-- **Signal Strength Indicators**: Color-coded markers show signal strength (green for excellent, yellow for good, red for poor)
-- **Database Management**: Import, merge, and export WiFi network databases
-- **Network Notes**: Add and save notes for specific WiFi networks
-- **Search Functionality**: Quickly find networks by SSID
-- **Detailed Statistics**: View comprehensive statistics about your WiFi database
+- **Intelligent Network Grouping**: Automatically groups multiple access points of the same network (e.g., mesh networks, dual-band routers)
+- **Advanced Position Triangulation**: 
+  - Uses weighted averaging based on signal strength and GPS accuracy
+  - Selects best quality readings for more accurate positioning
+  - Handles multiple observations of the same network
+- **Signal Strength Visualization**: 
+  - Color-coded markers (green for excellent, yellow for good, red for poor)
+  - Marker size indicates number of observations
+  - Special indicators for networks with notes
+- **Database Management**: 
+  - Import and merge WiGLE SQLite databases
+  - Export combined database
+  - Add and manage network notes
+- **Smart Search**: Quickly find networks by SSID with real-time filtering
+- **Detailed Statistics**: 
+  - Network counts and distribution
+  - Security type analysis
+  - Multiple access point detection
 - **Persistent Storage**: Local database storage using IndexedDB
-- **Multiple Observations**: Track networks seen multiple times with weighted position averaging
 - **Offline Capable**: Works entirely in the browser with no server requirements
 
 ## Usage
@@ -24,68 +36,52 @@ A powerful web-based application for visualizing and managing WiFi networks from
 
 2. **Importing Data**:
    - Click "Choose File" and select a WiFi database file (.sqlite or .db)
-   - Compatible with WiGLE SQLite exports and previously exported databases
-   - The map will populate with markers representing WiFi networks
+   - Compatible with WiGLE SQLite exports
+   - Automatically merges duplicate networks and combines multiple access points
 
 3. **Navigating the Map**:
-   - Zoom and pan to explore the network distribution
-   - Click on markers to view detailed information about each network
-   - Networks with notes have a blue indicator dot
+   - Zoom and pan to explore network distribution
+   - Click markers to view detailed information:
+     - Network name and BSSID
+     - Number of access points if multiple exist
+     - Signal strength and frequency
+     - Security capabilities
+     - Observation count and accuracy
 
-4. **Searching**:
-   - Use the search box to filter networks by SSID
-   - Matching networks will be highlighted on the map
-
-5. **Adding Notes**:
-   - Click on a network marker to select it
-   - Click "Add Note" to open the note editor
-   - Enter your notes and click "Save Note"
-
-6. **Database Management**:
-   - Click "Save DB" to export your entire database as a SQLite file
-   - Click "DB Info" to view detailed statistics about your database
-   - Import additional databases to merge with your existing data
-
-## WiGLE Compatibility
-
-This application is fully compatible with [WiGLE.net](https://wigle.net/) SQLite database exports:
-
-1. **Exporting from WiGLE**:
-   - In the WiGLE Android app, go to "Database" → "Export Database"
-   - Select SQLite as the export format
-   - Transfer the exported .sqlite file to your computer
-
-2. **Importing WiGLE Data**:
-   - Load the exported .sqlite file directly into WiFi Map Viewer
-   - All network data including coordinates, signal strength, and security types will be properly imported
-   - Multiple WiGLE database files can be merged for comprehensive coverage
-
-3. **Data Consistency**:
-   - The application maintains the same database schema as WiGLE for core network data
-   - Additional metadata like notes are stored separately to avoid conflicts
-   - Exported databases can be re-imported into WiGLE if needed
+4. **Network Management**:
+   - Search for networks using the search box
+   - Add notes to networks for future reference
+   - View network statistics and distribution
 
 ## Technical Details
 
-This application is built entirely with client-side web technologies:
-
-- **Mapping**: [Leaflet.js](https://leafletjs.com/) for interactive map rendering
-- **Database**: [SQL.js](https://sql.js.org/) for client-side SQLite processing
-- **Storage**: IndexedDB for persistent local storage
-- **UI**: Pure JavaScript, HTML5, and CSS3
-
 ### Data Processing
 
-- Networks are stored with weighted position averaging based on signal strength
-- Multiple observations of the same network improve position accuracy
-- Network metadata includes signal strength, security type, and frequency
+- **Network Identification**:
+  - Uses BSSID (MAC address) as unique identifier
+  - Groups multiple BSSIDs under same SSID when appropriate
+  - Handles both 2.4GHz and 5GHz bands from same router
 
-## Project Structure
+- **Position Calculation**:
+  - Weighted average based on signal strength
+  - Considers GPS accuracy from location data
+  - Uses top 3 highest quality readings for positioning
+  - Handles multiple observations over time
 
-- `index.html` - Main HTML file and entry point
-- `styles.css` - CSS styles for the application
-- `script.js` - Core application logic and UI interactions
-- `masterdb.js` - Database management and storage functionality
+- **Quality Metrics**:
+  - Signal strength (dBm)
+  - GPS accuracy
+  - Number of observations
+  - Time of observation
+
+### Database Structure
+
+- **Network Table**:
+  - Primary key: BSSID
+  - SSID and network capabilities
+  - Best signal level and position
+  - Observation count and accuracy
+  - Custom notes and timestamps
 
 ## Privacy & Security
 
@@ -101,4 +97,7 @@ All data processing happens entirely in your browser. No data is sent to any ser
 
 This project is licensed under the MIT License.
 
-Third-party libraries used in this project (Leaflet.js and SQL.js) are subject to their respective licenses.
+Third-party libraries used:
+- Leaflet.js for mapping
+- SQL.js for database management
+- Leaflet.markercluster for marker clustering
