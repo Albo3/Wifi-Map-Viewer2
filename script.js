@@ -58,6 +58,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         const networks = await window.masterDb.getAllNetworks();
         console.log(`Retrieved ${networks.length} networks from master database`);
         
+        // Check notes in database
+        await window.masterDb.checkNotes();
+        
         if (networks.length > 0) {
             console.log("Displaying networks on map...");
             displayNetworks(networks);
@@ -90,6 +93,10 @@ function getSignalStrengthClass(strength) {
 
 // Helper function to create custom icon based on signal strength and note status
 function createCustomIcon(strength, hasNote = false, observations = 1) {
+    if (hasNote) {
+        console.log('Creating icon for network with note, strength:', strength);
+    }
+    
     const [strengthClass] = getSignalStrengthClass(strength);
     const colors = {
         good: '#4CAF50',
@@ -199,6 +206,13 @@ function displayNetworks(networks) {
     // Add markers for each network
     networks.forEach(network => {
         const hasNote = network.note && network.note.trim() !== '';
+        if (hasNote) {
+            console.log('Creating marker for network with note:', {
+                ssid: network.ssid,
+                bssid: network.bssid,
+                note: network.note
+            });
+        }
         
         const marker = L.marker([network.lastlat, network.lastlon], {
             icon: createCustomIcon(
@@ -235,9 +249,13 @@ function displayNetworks(networks) {
                 <span>${network.note}</span>
             </div>` : '';
         
-        marker.bindPopup(`
+        const popupContent = `
             <div class="custom-popup">
                 <h3>${network.ssid}</h3>
+                <div class="popup-row">
+                    <span class="popup-label">BSSID:</span>
+                    <span>${network.bssid}</span>
+                </div>
                 <div class="popup-row">
                     <span class="signal-strength ${strengthClass}">
                         Signal: ${network.bestlevel} dBm (${strengthLabel})
@@ -258,12 +276,15 @@ function displayNetworks(networks) {
                 ${observationInfo}
                 ${noteSection}
             </div>
-        `);
+        `;
+
+        marker.bindPopup(popupContent);
 
         // Add click handler
         marker.on('click', function() {
             selectedNetwork = {
                 ssid: network.ssid,
+                bssid: network.bssid,
                 marker: marker
             };
             
@@ -279,7 +300,8 @@ function displayNetworks(networks) {
 
         markers.push({
             marker: marker,
-            ssid: network.ssid.toLowerCase()
+            ssid: network.ssid.toLowerCase(),
+            bssid: network.bssid
         });
 
         bounds.extend([network.lastlat, network.lastlon]);
@@ -290,18 +312,23 @@ function displayNetworks(networks) {
     
     // Add event listener for when spiderfied - show tooltips automatically
     markerCluster.on('spiderfied', function(e) {
-        // Highlight spiderfied markers but DON'T show tooltips automatically
         e.markers.forEach(function(marker) {
-            marker.getElement().classList.add('marker-highlight-spider');
-            // Removed: marker.openTooltip() - We don't want all tooltips open at once
+            // Check if marker element exists before accessing it
+            const element = marker.getElement();
+            if (element) {
+                element.classList.add('marker-highlight-spider');
+            }
         });
     });
     
     // Remove highlight and close tooltips when unspiderfied
     markerCluster.on('unspiderfied', function(e) {
         e.markers.forEach(function(marker) {
-            marker.getElement().classList.remove('marker-highlight-spider');
-            marker.closeTooltip();
+            const element = marker.getElement();
+            if (element) {
+                element.classList.remove('marker-highlight-spider');
+                marker.closeTooltip();
+            }
         });
     });
     
@@ -389,13 +416,18 @@ function initEventListeners() {
             const note = networkNote.value.trim();
             const hasNote = note !== '';
             
+            // Add debug logging
+            console.log('Selected network:', selectedNetwork);
+            
             try {
-                console.log(`Saving note for network: ${selectedNetwork.ssid}`);
-                // Save note to master database
-                await window.masterDb.saveNote(selectedNetwork.ssid, note);
+                if (!selectedNetwork.bssid) {
+                    throw new Error('No BSSID available for selected network');
+                }
+                
+                console.log(`Saving note for network: ${selectedNetwork.ssid} (${selectedNetwork.bssid})`);
+                await window.masterDb.saveNote(selectedNetwork.bssid, note);
                 
                 // Update marker icon
-                // Get the current signal strength from the marker
                 let currentStrength = -70; // Default to medium
                 if (selectedNetwork.marker.options.icon.options.html.includes('#4CAF50')) {
                     currentStrength = -40; // Good
@@ -406,7 +438,7 @@ function initEventListeners() {
                 // Update the marker icon to show note indicator
                 selectedNetwork.marker.setIcon(createCustomIcon(currentStrength, hasNote));
                 
-                // Update the popup to include the note
+                // Update the popup content
                 const popupContent = selectedNetwork.marker.getPopup().getContent();
                 const updatedContent = popupContent.includes('Network Notes:') 
                     ? popupContent.replace(/<div class="popup-row note-row">[\s\S]*?<\/div>/, 
@@ -425,7 +457,6 @@ function initEventListeners() {
                 // Hide the note editor
                 noteEditor.style.display = 'none';
                 
-                // No need to manually save the database
                 alert('Note saved!');
             } catch (error) {
                 console.error('Error saving note:', error);
@@ -486,11 +517,12 @@ function initEventListeners() {
         let matchCount = 0;
         const matchingNetworks = [];
         
-        markers.forEach(({marker, ssid}) => {
+        markers.forEach(({marker, ssid, bssid}) => {
             if (ssid.includes(searchTerm)) {
                 matchCount++;
                 matchingNetworks.push({
                     ssid: ssid,
+                    bssid: bssid,
                     marker: marker
                 });
             }
@@ -533,6 +565,7 @@ function initEventListeners() {
                                     // Select this network
                                     selectedNetwork = {
                                         ssid: network.ssid,
+                                        bssid: network.bssid,
                                         marker: network.marker
                                     };
                                     

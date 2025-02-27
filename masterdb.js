@@ -2,295 +2,278 @@
 class MasterDatabase {
     constructor() {
         this.db = null;
-        this.dbName = 'WifiMapMaster';
-        this.dbVersion = 1;
-        this.usingMemoryStorage = false;
-        this.memoryStorage = null;
+        this.SQL = null;
     }
 
-    // Initialize the database
     async init() {
-        return new Promise((resolve, reject) => {
-            try {
-                const request = indexedDB.open(this.dbName, this.dbVersion);
-                
-                request.onupgradeneeded = (event) => {
-                    const db = event.target.result;
-                    
-                    // Create network store
-                    if (!db.objectStoreNames.contains('networks')) {
-                        const networkStore = db.createObjectStore('networks', { keyPath: 'ssid' });
-                        networkStore.createIndex('type', 'type', { unique: false });
-                        networkStore.createIndex('security', 'capabilities', { unique: false });
-                    }
-                    
-                    // Create notes store
-                    if (!db.objectStoreNames.contains('notes')) {
-                        db.createObjectStore('notes', { keyPath: 'ssid' });
-                    }
-                    
-                    // Create metadata store
-                    if (!db.objectStoreNames.contains('metadata')) {
-                        db.createObjectStore('metadata', { keyPath: 'key' });
-                    }
-                };
-                
-                request.onsuccess = (event) => {
-                    this.db = event.target.result;
-                    console.log("IndexedDB initialized successfully");
-                    resolve(this.db);
-                };
-                
-                request.onerror = (event) => {
-                    console.error("IndexedDB error:", event.target.error);
-                    // Fall back to memory-only storage
-                    this.useMemoryStorage();
-                    resolve(null);
-                };
-            } catch (e) {
-                console.error("Error initializing IndexedDB:", e);
-                // Fall back to memory-only storage
-                this.useMemoryStorage();
-                resolve(null);
+        try {
+            // Initialize SQL.js
+            if (!this.SQL) {
+                this.SQL = await initSqlJs({ 
+                    locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+                });
             }
-        });
-    }
-
-    // Add memory storage fallback
-    useMemoryStorage() {
-        console.log("Using in-memory storage (changes won't persist)");
-        this.memoryStorage = {
-            networks: new Map(),
-            notes: new Map(),
-            metadata: new Map()
-        };
-        this.usingMemoryStorage = true;
+            
+            // Try to load existing database from localStorage
+            if (!this.db) {
+                const loaded = await this.loadFromLocalStorage();
+                if (!loaded) {
+                    // Create new database if none exists
+                    this.db = new this.SQL.Database();
+                    
+                    // Create base network table
+                    this.db.run(`
+                        CREATE TABLE network (
+                            bssid TEXT PRIMARY KEY NOT NULL,
+                            ssid TEXT NOT NULL,
+                            frequency INTEGER NOT NULL,
+                            capabilities TEXT NOT NULL,
+                            lasttime INTEGER NOT NULL,
+                            lastlat REAL NOT NULL,
+                            lastlon REAL NOT NULL,
+                            type TEXT NOT NULL DEFAULT 'W',
+                            bestlevel INTEGER NOT NULL DEFAULT 0
+                        )
+                    `);
+                    
+                    // Add note columns separately
+                    try {
+                        this.db.run(`ALTER TABLE network ADD COLUMN note TEXT`);
+                        this.db.run(`ALTER TABLE network ADD COLUMN note_timestamp INTEGER`);
+                    } catch (e) {
+                        // Columns might already exist
+                        console.log('Note columns might already exist');
+                    }
+                }
+            }
+            
+            // Save initial database state
+            await this.saveToLocalStorage();
+            
+            return this.db;
+        } catch (error) {
+            console.error('Error initializing database:', error);
+            throw error;
+        }
     }
 
     // Import data from a WiGLE SQLite database
     async importFromSQLite(sqliteData) {
-        if (!this.db) await this.init();
-        
-        const SQL = await initSqlJs({ locateFile: () => 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm' });
-        const importDb = new SQL.Database(new Uint8Array(sqliteData));
-        
-        // Get networks from the import database
-        const importNetworks = importDb.exec(`
-            SELECT ssid, lastlat, lastlon, bestlevel, 
-                   capabilities, frequency, lasttime,
-                   type
-            FROM network 
-            WHERE lastlat IS NOT NULL AND lastlon IS NOT NULL;
-        `);
-        
-        if (importNetworks.length === 0 || !importNetworks[0].values.length) {
-            return { added: 0, updated: 0 };
-        }
-        
-        const columns = importNetworks[0].columns;
-        const values = importNetworks[0].values;
-        
-        let stats = { added: 0, updated: 0 };
-        
-        // Start a transaction
-        const tx = this.db.transaction(['networks', 'metadata'], 'readwrite');
-        const networkStore = tx.objectStore('networks');
-        
-        for (const row of values) {
-            const ssid = row[columns.indexOf("ssid")];
-            const newLat = row[columns.indexOf("lastlat")];
-            const newLon = row[columns.indexOf("lastlon")];
-            const newSignal = row[columns.indexOf("bestlevel")];
+        try {
+            if (!this.SQL) {
+                await this.init();
+            }
             
-            // Create network object
-            const network = {
-                ssid: ssid,
-                lastlat: newLat,
-                lastlon: newLon,
-                bestlevel: newSignal,
-                capabilities: row[columns.indexOf("capabilities")],
-                frequency: row[columns.indexOf("frequency")],
-                lasttime: row[columns.indexOf("lasttime")],
-                type: row[columns.indexOf("type")],
-                importDate: Date.now(),
-                observations: 1  // Track number of observations
-            };
+            const importDb = new this.SQL.Database(new Uint8Array(sqliteData));
             
-            // Check if network exists
-            const getRequest = networkStore.get(ssid);
+            // First check if our network table has the note columns
+            try {
+                // Try to add note columns - if they exist, this will fail silently
+                this.db.run(`ALTER TABLE network ADD COLUMN note TEXT`);
+                this.db.run(`ALTER TABLE network ADD COLUMN note_timestamp INTEGER`);
+            } catch (e) {
+                // Column might already exist, that's fine
+                console.log('Note columns might already exist');
+            }
             
-            await new Promise(resolve => {
-                getRequest.onsuccess = () => {
-                    const existingNetwork = getRequest.result;
-                    
-                    if (existingNetwork) {
-                        // Calculate weighted average for location based on signal strength
-                        // Convert signal strength (negative dBm) to positive weight
-                        // Higher signal = higher weight
-                        const existingWeight = Math.pow(10, (existingNetwork.bestlevel + 100) / 10);
-                        const newWeight = Math.pow(10, (newSignal + 100) / 10);
-                        const totalWeight = existingWeight + newWeight;
-                        
-                        // Weighted lat/lon calculation
-                        const weightedLat = (
-                            existingNetwork.lastlat * existingWeight + 
-                            newLat * newWeight
-                        ) / totalWeight;
-                        
-                        const weightedLon = (
-                            existingNetwork.lastlon * existingWeight + 
-                            newLon * newWeight
-                        ) / totalWeight;
-                        
-                        // Update the network with new weighted position and best signal
-                        const updatedNetwork = {
-                            ...existingNetwork,
-                            lastlat: weightedLat,
-                            lastlon: weightedLon,
-                            bestlevel: Math.max(existingNetwork.bestlevel, newSignal),
-                            observations: (existingNetwork.observations || 1) + 1,
-                            lastUpdated: Date.now()
-                        };
-                        
-                        // Store additional observation data if we want to show history
-                        if (!updatedNetwork.observationHistory) {
-                            updatedNetwork.observationHistory = [];
-                        }
-                        
-                        // Add this observation to history (limit to last 10)
-                        updatedNetwork.observationHistory.unshift({
-                            lat: newLat,
-                            lon: newLon,
-                            signal: newSignal,
-                            timestamp: Date.now()
-                        });
-                        
-                        // Limit history size
-                        if (updatedNetwork.observationHistory.length > 10) {
-                            updatedNetwork.observationHistory = 
-                                updatedNetwork.observationHistory.slice(0, 10);
-                        }
-                        
-                        networkStore.put(updatedNetwork);
-                        stats.updated++;
-                    } else {
-                        // Add new network
-                        network.observationHistory = [{
-                            lat: newLat, 
-                            lon: newLon,
-                            signal: newSignal,
-                            timestamp: Date.now()
-                        }];
-                        
-                        networkStore.add(network);
+            // Import networks
+            const networks = importDb.exec(`
+                SELECT bssid, ssid, frequency, capabilities, lasttime, 
+                       lastlat, lastlon, type, bestlevel
+                FROM network
+                WHERE lastlat IS NOT NULL AND lastlon IS NOT NULL`
+            );
+            
+            if (!networks || networks.length === 0) {
+                console.log('No networks found in import database');
+                return { added: 0, updated: 0 };
+            }
+            
+            let stats = { added: 0, updated: 0, notes: 0 };
+            
+            // Begin transaction
+            this.db.run('BEGIN TRANSACTION');
+            
+            try {
+                // Import networks
+                networks[0].values.forEach(network => {
+                    try {
+                        this.db.run(`
+                            INSERT OR REPLACE INTO network 
+                            (bssid, ssid, frequency, capabilities, lasttime, 
+                             lastlat, lastlon, type, bestlevel)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            network
+                        );
                         stats.added++;
+                    } catch (e) {
+                        console.error('Error inserting network:', e);
                     }
-                    resolve();
-                };
+                });
                 
-                getRequest.onerror = () => {
-                    // If error, try to add anyway
-                    networkStore.add(network);
-                    stats.added++;
-                    resolve();
-                };
-            });
+                // Check if old notes table exists and import notes if it does
+                try {
+                    const notes = importDb.exec(`
+                        SELECT bssid, note, timestamp 
+                        FROM network_notes`
+                    );
+                    
+                    if (notes && notes.length > 0) {
+                        notes[0].values.forEach(([bssid, note, timestamp]) => {
+                            try {
+                                this.db.run(`
+                                    UPDATE network 
+                                    SET note = ?, note_timestamp = ?
+                                    WHERE bssid = ?`,
+                                    [note, timestamp, bssid]
+                                );
+                                stats.notes++;
+                            } catch (e) {
+                                console.error('Error importing note:', e);
+                            }
+                        });
+                    }
+                } catch (e) {
+                    // network_notes table doesn't exist, that's fine for new databases
+                    console.log('No notes table found in import database');
+                }
+                
+                this.db.run('COMMIT');
+                
+                // Save to localStorage after import
+                await this.saveToLocalStorage();
+                
+                console.log(`Import complete: ${stats.added} networks, ${stats.notes} notes`);
+            } catch (error) {
+                this.db.run('ROLLBACK');
+                throw error;
+            }
+            
+            importDb.close();
+            return stats;
+        } catch (error) {
+            console.error('Error in importFromSQLite:', error);
+            throw error;
         }
-        
-        // Update metadata
-        const metadataStore = tx.objectStore('metadata');
-        const lastImportMeta = {
-            key: 'lastImport',
-            date: Date.now(),
-            totalNetworks: values.length
-        };
-        metadataStore.put(lastImportMeta);
-        
-        return new Promise((resolve, reject) => {
-            tx.oncomplete = () => resolve(stats);
-            tx.onerror = (event) => reject(`Transaction error: ${event.target.error}`);
-        });
     }
 
     // Get all networks for display
     async getAllNetworks() {
         if (!this.db) await this.init();
         
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['networks', 'notes'], 'readonly');
-            const networkStore = tx.objectStore('networks');
-            const noteStore = tx.objectStore('notes');
+        try {
+            // Log the query execution for debugging
+            console.log('Executing getAllNetworks query...');
             
-            const networks = [];
-            const notesMap = new Map();
+            const result = this.db.exec(`
+                SELECT 
+                    bssid,
+                    ssid,
+                    frequency,
+                    capabilities,
+                    lasttime,
+                    lastlat,
+                    lastlon,
+                    type,
+                    bestlevel,
+                    note
+                FROM network
+                WHERE lastlat IS NOT NULL AND lastlon IS NOT NULL
+                ORDER BY bestlevel DESC
+            `);
             
-            // First get all notes
-            const notesRequest = noteStore.openCursor();
-            notesRequest.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    // Store with normalized SSID as key
-                    const normalizedSsid = this.normalizeSsid(cursor.value.ssid);
-                    notesMap.set(normalizedSsid, cursor.value.note);
-                    cursor.continue();
-                } else {
-                    // Then get all networks
-                    const networksRequest = networkStore.openCursor();
-                    networksRequest.onsuccess = (event) => {
-                        const cursor = event.target.result;
-                        if (cursor) {
-                            const network = cursor.value;
-                            // Look up note using normalized SSID
-                            const normalizedSsid = this.normalizeSsid(network.ssid);
-                            network.note = notesMap.get(normalizedSsid) || '';
-                            networks.push(network);
-                            cursor.continue();
-                        } else {
-                            console.log(`Retrieved ${networks.length} networks, ${notesMap.size} with notes`);
-                            resolve(networks);
-                        }
-                    };
+            if (!result || result.length === 0) {
+                console.log('No networks found');
+                return [];
+            }
+            
+            // Log the first few results for debugging
+            console.log('First few networks:', result[0].values.slice(0, 3));
+            
+            const columns = result[0].columns;
+            const networks = result[0].values.map(row => {
+                const network = {
+                    bssid: row[columns.indexOf('bssid')],
+                    ssid: row[columns.indexOf('ssid')],
+                    frequency: row[columns.indexOf('frequency')],
+                    capabilities: row[columns.indexOf('capabilities')],
+                    lasttime: row[columns.indexOf('lasttime')],
+                    lastlat: row[columns.indexOf('lastlat')],
+                    lastlon: row[columns.indexOf('lastlon')],
+                    type: row[columns.indexOf('type')],
+                    bestlevel: row[columns.indexOf('bestlevel')],
+                    note: row[columns.indexOf('note')] || ''
+                };
+                
+                // Log networks with notes for debugging
+                if (network.note) {
+                    console.log('Found network with note:', {
+                        ssid: network.ssid,
+                        bssid: network.bssid,
+                        note: network.note
+                    });
                 }
-            };
+                
+                return network;
+            });
             
-            tx.onerror = (event) => reject(`Transaction error: ${event.target.error}`);
-        });
+            return networks;
+        } catch (error) {
+            console.error('Error getting networks:', error);
+            return [];
+        }
     }
 
     // Save a note for a network
-    async saveNote(ssid, note) {
-        if (!this.db && !this.usingMemoryStorage) await this.init();
+    async saveNote(bssid, note) {
+        if (!this.db) await this.init();
         
-        // Normalize the SSID
-        const normalizedSsid = this.normalizeSsid(ssid);
-        
-        const noteObj = {
-            ssid: normalizedSsid,
-            originalSsid: ssid,
-            note: note,
-            timestamp: Date.now()
-        };
-        
-        if (this.usingMemoryStorage) {
-            // Use in-memory storage
-            this.memoryStorage.notes.set(normalizedSsid, noteObj);
-            console.log(`Note saved in memory for: ${normalizedSsid}`);
-            return Promise.resolve();
-        } else {
-            // Use IndexedDB as before
-            return new Promise((resolve, reject) => {
-                const tx = this.db.transaction('notes', 'readwrite');
-                const noteStore = tx.objectStore('notes');
-                
-                const request = noteStore.put(noteObj);
-                
-                request.onsuccess = () => {
-                    console.log(`Note saved for network: ${normalizedSsid}`);
-                    resolve();
-                };
-                request.onerror = () => reject(`Error saving note: ${request.error}`);
-            });
+        try {
+            const timestamp = Date.now();
+            
+            console.log('Saving note:', { bssid, note, timestamp });
+            
+            if (!bssid) throw new Error('BSSID is required');
+            
+            this.db.run(`
+                UPDATE network 
+                SET note = $note, 
+                    note_timestamp = $timestamp
+                WHERE bssid = $bssid`,
+                {
+                    $bssid: bssid,
+                    $note: note || '',
+                    $timestamp: timestamp
+                }
+            );
+            
+            await this.saveToLocalStorage();
+            console.log(`Note saved for network: ${bssid}`);
+        } catch (error) {
+            console.error('Error saving note:', error);
+            throw error;
         }
+    }
+
+    // Get note for a network
+    async getNote(ssid, bssid) {
+        if (!this.db) await this.init();
+        
+        const result = this.db.exec(`
+            SELECT note, timestamp 
+            FROM network_notes 
+            WHERE bssid = ?`,
+            [bssid]
+        );
+        
+        if (result.length > 0 && result[0].values.length > 0) {
+            return {
+                note: result[0].values[0][0],
+                timestamp: result[0].values[0][1]
+            };
+        }
+        
+        return null;
     }
 
     // Helper method to normalize SSIDs for consistent key usage
@@ -306,148 +289,144 @@ class MasterDatabase {
     async getStats() {
         if (!this.db) await this.init();
         
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['networks', 'notes', 'metadata'], 'readonly');
-            const networkStore = tx.objectStore('networks');
-            const noteStore = tx.objectStore('notes');
-            const metadataStore = tx.objectStore('metadata');
+        try {
+            // Get total networks
+            const networkCount = this.db.exec(`
+                SELECT COUNT(*) as count 
+                FROM network
+                WHERE lastlat IS NOT NULL AND lastlon IS NOT NULL`
+            );
             
+            // Get networks with notes count
+            const notesCount = this.db.exec(`
+                SELECT COUNT(*) as count 
+                FROM network_notes`
+            );
+            
+            // Get network types
+            const types = this.db.exec(`
+                SELECT type, COUNT(*) as count 
+                FROM network 
+                GROUP BY type`
+            );
+            
+            // Get security types
+            const security = this.db.exec(`
+                SELECT capabilities, COUNT(*) as count 
+                FROM network 
+                GROUP BY capabilities`
+            );
+
             const stats = {
-                totalNetworks: 0,
-                networksWithNotes: 0,
-                lastImport: null,
+                totalNetworks: networkCount[0].values[0][0],
+                networksWithNotes: notesCount[0].values[0][0],
+                lastImport: new Date(),
                 networkTypes: {},
                 securityTypes: {}
             };
-            
-            // Count networks
-            const countRequest = networkStore.count();
-            countRequest.onsuccess = () => {
-                stats.totalNetworks = countRequest.result;
+
+            // Process network types
+            if (types && types[0]) {
+                types[0].values.forEach(([type, count]) => {
+                    stats.networkTypes[type || 'Unknown'] = count;
+                });
+            }
+
+            // Process security types
+            if (security && security[0]) {
+                security[0].values.forEach(([capabilities, count]) => {
+                    stats.securityTypes[capabilities || 'Unknown'] = count;
+                });
+            }
+
+            return stats;
+        } catch (error) {
+            console.error('Error getting stats:', error);
+            return {
+                totalNetworks: 0,
+                networksWithNotes: 0,
+                networkTypes: {},
+                securityTypes: {}
             };
-            
-            // Count notes
-            const notesRequest = noteStore.count();
-            notesRequest.onsuccess = () => {
-                stats.networksWithNotes = notesRequest.result;
-            };
-            
-            // Get last import metadata
-            const metaRequest = metadataStore.get('lastImport');
-            metaRequest.onsuccess = () => {
-                if (metaRequest.result) {
-                    stats.lastImport = new Date(metaRequest.result.date);
-                }
-            };
-            
-            // Count network types
-            const typesRequest = networkStore.index('type').openCursor();
-            typesRequest.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    const type = cursor.value.type || 'Unknown';
-                    stats.networkTypes[type] = (stats.networkTypes[type] || 0) + 1;
-                    cursor.continue();
-                }
-            };
-            
-            // Count security types
-            const securityRequest = networkStore.index('security').openCursor();
-            securityRequest.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    const security = cursor.value.capabilities || 'Unknown';
-                    stats.securityTypes[security] = (stats.securityTypes[security] || 0) + 1;
-                    cursor.continue();
-                }
-            };
-            
-            tx.oncomplete = () => resolve(stats);
-            tx.onerror = (event) => reject(`Error getting stats: ${event.target.error}`);
-        });
+        }
     }
 
     // Export the entire database as a SQLite file - improve note handling
     async exportToSQLite() {
         if (!this.db) await this.init();
-        
-        // Get all networks and notes
-        const networks = await this.getAllNetworks();
-        
-        // Create a new SQLite database
-        const SQL = await initSqlJs({ locateFile: () => 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm' });
-        const exportDb = new SQL.Database();
-        
-        // Create tables
-        exportDb.run(`
-            CREATE TABLE network (
-                ssid TEXT PRIMARY KEY,
-                lastlat REAL,
-                lastlon REAL,
-                bestlevel INTEGER,
-                capabilities TEXT,
-                frequency INTEGER,
-                lasttime INTEGER,
-                type TEXT
-            );
-            
-            CREATE TABLE network_notes (
-                ssid TEXT PRIMARY KEY,
-                note TEXT,
-                timestamp INTEGER
-            );
-        `);
-        
-        // Insert networks
-        const insertStmt = exportDb.prepare(`
-            INSERT INTO network (
-                ssid, lastlat, lastlon, bestlevel,
-                capabilities, frequency, lasttime, type
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        `);
-        
-        networks.forEach(network => {
-            insertStmt.run([
-                network.ssid,
-                network.lastlat,
-                network.lastlon,
-                network.bestlevel,
-                network.capabilities,
-                network.frequency,
-                network.lasttime,
-                network.type
-            ]);
-        });
-        
-        insertStmt.free();
-        
-        // Insert notes - only for networks that actually have notes
-        const noteStmt = exportDb.prepare(`
-            INSERT INTO network_notes (ssid, note, timestamp)
-            VALUES (?, ?, ?);
-        `);
-        
-        let noteCount = 0;
-        networks.forEach(network => {
-            if (network.note && network.note.trim() !== '') {
-                noteStmt.run([
-                    network.ssid,
-                    network.note,
-                    Date.now()
-                ]);
-                noteCount++;
+        return this.db.export();
+    }
+
+    // Add methods to persist and load the database
+    async saveToLocalStorage() {
+        try {
+            if (!this.db) return;
+            const data = this.db.export();
+            const base64 = arrayBufferToBase64(data);
+            localStorage.setItem('wifiDatabase', base64);
+            console.log('Database saved to localStorage');
+        } catch (error) {
+            console.error('Error saving to localStorage:', error);
+        }
+    }
+
+    async loadFromLocalStorage() {
+        try {
+            const savedData = localStorage.getItem('wifiDatabase');
+            if (savedData) {
+                const arrayBuffer = base64ToArrayBuffer(savedData);
+                this.db = new this.SQL.Database(new Uint8Array(arrayBuffer));
+                console.log('Database loaded from localStorage');
+                return true;
             }
-        });
+        } catch (error) {
+            console.error('Error loading from localStorage:', error);
+        }
+        return false;
+    }
+
+    // Debug method to check notes in database
+    async checkNotes() {
+        if (!this.db) await this.init();
         
-        console.log(`Exported ${networks.length} networks and ${noteCount} notes`);
-        noteStmt.free();
-        
-        // Export the database to a binary array
-        const data = exportDb.export();
-        
-        return data;
+        try {
+            const result = this.db.exec(`
+                SELECT n.ssid, n.bssid, nn.note, nn.timestamp
+                FROM network_notes nn
+                JOIN network n ON n.bssid = nn.bssid
+            `);
+            
+            if (!result || result.length === 0) {
+                console.log('No notes found in database');
+                return;
+            }
+            
+            console.log('Notes in database:', result[0].values);
+        } catch (error) {
+            console.error('Error checking notes:', error);
+        }
     }
 }
 
-// Create a global instance that can be accessed by other scripts
+// Helper functions for base64 conversion
+function arrayBufferToBase64(buffer) {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return window.btoa(binary);
+}
+
+function base64ToArrayBuffer(base64) {
+    const binary_string = window.atob(base64);
+    const len = binary_string.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binary_string.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
+
+// Create global instance
 window.masterDb = new MasterDatabase(); 
